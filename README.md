@@ -1,5 +1,7 @@
 # compet
 
+原软件链接：https://github.com/morningmeal/morningmeal_ComPet
+
 1.发布了手柄适配按键映射的补丁包，适配打游戏使用，具体使用请看压缩包中的readme[gamepad-package.zip](https://github.com/user-attachments/files/33134467/gamepad-package.zip)
 
 
