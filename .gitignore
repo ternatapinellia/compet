@@ -13,4 +13,4 @@ _bak_stage/
 _internal/
 
 # 临时备份压缩包
-*.zip
+*.zip_gen_out.txt
