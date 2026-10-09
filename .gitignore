@@ -1,0 +1,16 @@
+# ── 运行时 / 构建产物（可自动重建，不入库）──────────────────────────
+*.log
+*.tmp
+__.pyo
+CompetLauncher.exe~
+__pycache__/
+.zig-cache/
+_re/
+_gen/
+_bak_stage/
+
+# PyInstaller 运行时依赖包（约 134MB，可由 Compet.exe 重新解包，不入库）
+_internal/
+
+# 临时备份压缩包
+*.zip
