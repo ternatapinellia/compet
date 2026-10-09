@@ -33,7 +33,7 @@
   修改按键：双击 GamepadSettings.bat 打开 GUI 配置。
 
 【Build from source】
-  安装 Go 后运行 build-launcher.bat，源码在 launcher-src/main.go
+  源码在 _dev/ 目录：_dev/launcher-src（启动器）、_dev/injector-src（动图补丁）
 
 【Tech stack】
   Go + Windows API (XInput, keybd_event, DLL injection)
@@ -53,5 +53,5 @@
     - 若动图不显示，检查 CompetGifFix.log 和 %USERPROFILE%\_compet_gif_fix_error.log。
 
 【Build from source】
-  安装 Go 后运行 launcher-src\build-launcher.bat 生成 CompetLauncher.exe。
-  重新编译动图补丁 DLL：运行 injector-src\build-giffix.bat（需要 C 编译器，脚本会自动探测 zig）。
+  安装 Go 后运行 _dev\launcher-src\build-launcher.bat 生成 CompetLauncher.exe。
+  重新编译动图补丁 DLL：运行 _dev\injector-src\build-giffix.bat（需要 C 编译器，脚本会自动探测 zig）。

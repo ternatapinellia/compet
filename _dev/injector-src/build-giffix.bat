@@ -1,8 +1,8 @@
 @echo off
-rem Build CompetGifFix.dll  (requires any C compiler; zig is auto-detected)
+rem Build CompetGifFix.dll from _dev\injector-src\CompetGifFix.c
 setlocal
 set "HERE=%~dp0"
-set "OUT=%~dp0..\CompetGifFix.dll"
+set "OUT=%~dp0..\..\CompetGifFix.dll"
 set "ZIG=%LOCALAPPDATA%\Programs\Python\Python314\Lib\site-packages\ziglang\zig.exe"
 
 if exist "%ZIG%" (

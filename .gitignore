@@ -8,10 +8,10 @@ __pycache__/
 _re/
 _gen/
 _bak_stage/
+*.zip
+
+# transient task logs
+_gen_out.txt
 
 # PyInstaller runtime bundle (~134MB, re-extractable from Compet.exe)
 _internal/
-
-# archives / scratch
-*.zip
-_gen_out.txt
