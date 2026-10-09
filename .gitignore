@@ -1,7 +1,7 @@
-# ── 运行时 / 构建产物（可自动重建，不入库）──────────────────────────
+# ---- runtime / build artifacts (regenerable, not tracked) ----
 *.log
 *.tmp
-__.pyo
+*.pyo
 CompetLauncher.exe~
 __pycache__/
 .zig-cache/
@@ -9,8 +9,9 @@ _re/
 _gen/
 _bak_stage/
 
-# PyInstaller 运行时依赖包（约 134MB，可由 Compet.exe 重新解包，不入库）
+# PyInstaller runtime bundle (~134MB, re-extractable from Compet.exe)
 _internal/
 
-# 临时备份压缩包
-*.zip_gen_out.txt
+# archives / scratch
+*.zip
+_gen_out.txt
