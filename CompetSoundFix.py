@@ -3,12 +3,25 @@
 # Runtime patch for the Compet desktop pet:
 #   1. Rotate numbered sound families (spam_01..spam_10) instead of replaying a
 #      single sample.
-#   2. Wait for QSoundEffect to reach Ready before play(), because setSource()
-#      loads asynchronously and the original code drops the call while loading.
+#   2. Make playback survive QSoundEffect's asynchronous loading.
+#
+# Why this version exists
+# -----------------------
+# The first version waited for a sample to reach Ready by connecting a throwaway
+# handler to QSoundEffect.statusChanged.  When a player never became Ready
+# (a half-loaded source, which happens when a new source is set while the old
+# one is still loading) that handler stayed connected forever and play() was
+# never called again: the pool went permanently silent until Compet restarted.
+#
+# This version instead
+#   * never leaves a dangling statusChanged connection,
+#   * retries on a short owned QTimer and gives up cleanly,
+#   * rebuilds an individual player that stays unhealthy, so one bad player can
+#     no longer mute the whole pool.
 #
 # The DLL injects this script very early in startup, when the frozen app's
-# module system is not ready yet.  install() is therefore retried from a
-# background thread until the imports succeed.
+# module system is not ready yet, so install() is retried from a background
+# thread until the imports succeed.
 #
 # Nothing on disk is modified; restarting Compet reverts everything.
 # ---------------------------------------------------------------------------
@@ -20,6 +33,9 @@ import time
 import threading
 
 POOL_RE = re.compile(r"^(.*?)(\d+)$")
+
+_RETRY_MS = 40           # retry cadence while a sample is still loading
+_MAX_RETRIES = 8         # ~320 ms, then the player is treated as unhealthy
 
 
 def _pool_key(path):
@@ -99,26 +115,12 @@ def install():
     import core.config_manager as cm
     import core.sound_manager as sm
     from PyQt6.QtMultimedia import QSoundEffect
-    from PyQt6.QtCore import QUrl
+    from PyQt6.QtCore import QUrl, QTimer
     from core.config_manager import config_mgr
 
     mgr_cls = sm.SoundManager
     if getattr(mgr_cls, "_compet_sound_patched", False):
         return True
-
-    def _fill_pool(pool, paths):
-        if not paths:
-            for p in pool:
-                try:
-                    p.setSource(QUrl())
-                except Exception:
-                    pass
-            return
-        for i, player in enumerate(pool):
-            try:
-                player.setSource(QUrl.fromLocalFile(paths[i % len(paths)]))
-            except Exception:
-                pass
 
     def _ready(player):
         try:
@@ -126,38 +128,81 @@ def install():
         except Exception:
             return True
 
-    def _play_now(player):
-        """Play once the sample finished loading; the naive call is dropped."""
+    def _force(player):
+        try:
+            player.play()
+            return True
+        except Exception:
+            return False
+
+    def _set_source(player, path):
+        try:
+            player.setSource(QUrl.fromLocalFile(path) if path else QUrl())
+        except Exception:
+            pass
+
+    def _fill_pool(pool, paths):
+        for i, player in enumerate(pool):
+            _set_source(player, paths[i % len(paths)] if paths else None)
+
+    def _start(pool, paths, idx, label):
+        """Play pool[idx], self-healing a player that never becomes Ready."""
+        player = pool[idx]
+
         if _ready(player):
-            try:
-                player.play()
-            except Exception:
-                pass
+            _force(player)
             return
 
-        holder = {"done": False}
+        # One recovery timer per player: rapid typing must not spawn a burst of
+        # timers that each rebuild the same player.
+        if getattr(player, "_compet_recovering", False):
+            return
 
-        def on_change():
-            if holder["done"]:
-                return
-            if _ready(player):
-                holder["done"] = True
-                try:
-                    player.statusChanged.disconnect(on_change)
-                except Exception:
-                    pass
-                try:
-                    player.play()
-                except Exception:
-                    pass
-
+        state = {"n": 0}
+        timer = QTimer(player)          # parented: dies with the player
+        timer.setInterval(_RETRY_MS)
         try:
-            player.statusChanged.connect(on_change)
+            player._compet_recovering = True
         except Exception:
+            pass
+
+        def tick():
+            state["n"] += 1
+            if _ready(player):
+                timer.stop()
+                timer.deleteLater()
+                try:
+                    player._compet_recovering = False
+                except Exception:
+                    pass
+                _force(player)
+                return
+            if state["n"] < _MAX_RETRIES:
+                return
             try:
-                player.play()
+                player._compet_recovering = False
             except Exception:
                 pass
+
+            # Unhealthy player: rebuild it instead of leaving a half-loaded
+            # source (and a dangling signal connection) behind for good.
+            timer.stop()
+            timer.deleteLater()
+            _log("%s: player %d never reached Ready - rebuilding" % (label, idx))
+            try:
+                fresh = QSoundEffect()
+                pool[idx] = fresh
+                if paths:
+                    _set_source(fresh, paths[idx % len(paths)])
+                try:
+                    fresh.setVolume(player.volume())
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        timer.timeout.connect(tick)
+        timer.start()
 
     def load_sounds(self):
         if not self._initialized:
@@ -185,18 +230,18 @@ def install():
             return
         if not _sound_flag(config_mgr, "key_sound_enabled", True):
             return
-        player = self.key_pool[self.key_idx]
-        self.key_idx = (self.key_idx + 1) % len(self.key_pool)
-        _play_now(player)
+        idx = self.key_idx
+        self.key_idx = (idx + 1) % len(self.key_pool)
+        _start(self.key_pool, getattr(self, "_key_pool_paths", []), idx, "key")
 
     def play_click(self):
         if not self._initialized or not self.click_pool:
             return
         if not _sound_flag(config_mgr, "click_sound_enabled", True):
             return
-        player = self.click_pool[self.click_idx]
-        self.click_idx = (self.click_idx + 1) % len(self.click_pool)
-        _play_now(player)
+        idx = self.click_idx
+        self.click_idx = (idx + 1) % len(self.click_pool)
+        _start(self.click_pool, getattr(self, "_click_pool_paths", []), idx, "click")
 
     mgr_cls.load_sounds = load_sounds
     mgr_cls.play_key = play_key
