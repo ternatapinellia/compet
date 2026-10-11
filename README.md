@@ -13,6 +13,8 @@
 
 5.发布了dr big shot的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[big shot.zip](https://github.com/user-attachments/files/33250515/big.shot.zip)
 
+6.发布了defernull hot shot的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[hot shot.zip](https://github.com/ternatapinellia/compet/releases/download/hotshot/hot.shot.zip)
+
 1. Released a patch package for gamepad support and key mapping, designed for gaming use. For detailed instructions, please check the **README** file included in the compressed package.
    [gamepad-package.zip](https://github.com/user-attachments/files/33086134/gamepad-package.zip)
 
@@ -27,4 +29,7 @@
 
 5. Released the **Dr. Big Shot typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
 [big shot.zip](https://github.com/user-attachments/files/33250515/big.shot.zip)
+
+6. Released the **Defernull Hot Shot typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
+[hot shot.zip](https://github.com/ternatapinellia/compet/releases/download/hotshot/hot.shot.zip)
   
