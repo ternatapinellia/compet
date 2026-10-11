@@ -255,6 +255,19 @@ func launchAndInject(exeDir string) error {
 		}
 	}
 
+	// Optional: sound fixes.  Adds numbered sound families (spam_01..spam_10)
+	// as a rotating pool and waits for each sample to finish loading before
+	// playing it.  Skipped when the DLL is absent.
+	sndDLL := filepath.Join(exeDir, "CompetSoundFix.dll")
+	if _, statErr := os.Stat(sndDLL); statErr == nil {
+		time.Sleep(2 * time.Second)
+		if err := injectDLL(pid, sndDLL); err != nil {
+			fmt.Printf("Warning: sound-fix DLL injection failed: %v\n", err)
+		} else {
+			fmt.Println("Compet sound rotation / playback fix injected successfully.")
+		}
+	}
+
 	return nil
 }
 
