@@ -18,6 +18,11 @@
 # WinMM PlaySoundW API, which has no loading state to get stuck in.  One of the
 # two paths always makes noise, so the pool cannot latch into silence.
 #
+# It also survives an empty <prefix>_sound_path.  Settings can end up with an
+# empty path (seen on 2026-10-12: "key pool = 0 files"), which used to leave the
+# pool empty and therefore silent; the configured path is now optional and a
+# bundled family is used when it is missing.
+#
 # The DLL injects this script very early in startup, when the frozen app's
 # module system is not ready yet, so install() is retried from a background
 # thread until the imports succeed.
@@ -96,7 +101,7 @@ def _pool_key(path):
     return (m.group(1), m.group(2)) if m else None
 
 
-def _collect_pool(chosen_path, user_dir, bundle_dir):
+def _family_paths(chosen_path, user_dir, bundle_dir):
     """Every file in the same numbered family; the user folder wins."""
     if not chosen_path:
         return []
@@ -124,7 +129,46 @@ def _collect_pool(chosen_path, user_dir, bundle_dir):
                 continue
             seen.add(ln)
             out.append(os.path.abspath(os.path.join(d, f)))
-    return out or [chosen_path]
+    return out
+
+
+def _find_default(default_prefix, user_dir, bundle_dir):
+    """First bundled file whose name starts with *default_prefix*, if any."""
+    if not default_prefix:
+        return None
+    for d in (user_dir, bundle_dir):
+        if not d or not os.path.isdir(d):
+            continue
+        try:
+            names = sorted(os.listdir(d))
+        except Exception:
+            continue
+        for f in names:
+            if f.lower().endswith(".wav") and f.lower().startswith(default_prefix):
+                return os.path.join(d, f)
+    return None
+
+
+def _collect_pool(chosen_path, user_dir, bundle_dir, default_prefix=None):
+    """The configured family, or a bundled one when the path is empty/missing.
+
+    The app persists <prefix>_sound_path and it can arrive empty, which used to
+    leave the pool with zero files and therefore no sound at all.  Falling back
+    keeps the pet audible no matter what the settings file contains.
+    """
+    paths = [p for p in _family_paths(chosen_path, user_dir, bundle_dir)
+             if p and os.path.exists(p)]
+    if paths:
+        return paths
+
+    fallback = _find_default(default_prefix, user_dir, bundle_dir)
+    if fallback:
+        fallback_paths = [p for p in _family_paths(fallback, user_dir, bundle_dir)
+                          if p and os.path.exists(p)]
+        if fallback_paths:
+            _log("no usable sound path (%r) - using %s" % (chosen_path, fallback))
+            return fallback_paths
+    return []
 
 
 def _sound_flag(config_mgr, name, default=True):
@@ -219,8 +263,8 @@ def install():
         if user_dir:
             user_dir = os.path.join(user_dir, "sounds")
 
-        self._key_pool_paths = _collect_pool(k_path, user_dir, sound_dir)
-        self._click_pool_paths = _collect_pool(c_path, user_dir, sound_dir)
+        self._key_pool_paths = _collect_pool(k_path, user_dir, sound_dir, "spam_")
+        self._click_pool_paths = _collect_pool(c_path, user_dir, sound_dir, "keyboard")
 
         _fill_pool(self.key_pool, self._key_pool_paths)
         _fill_pool(self.click_pool, self._click_pool_paths)
