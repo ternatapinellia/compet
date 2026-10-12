@@ -3,25 +3,24 @@
 # Runtime patch for the Compet desktop pet:
 #   1. Rotate numbered sound families (spam_01..spam_10) instead of replaying a
 #      single sample.
-#   2. Never go permanently silent.
+#   2. Never go silent, whatever the audio backend decides to do.
 #
 # Why this version exists
 # -----------------------
-# QSoundEffect loads its source asynchronously, and on this machine a player can
-# stay in Loading forever: the previous version logged
-# "player 0 never reached Ready - rebuilding".  Any design that waits for the
-# Ready state before calling play() can therefore drop every keystroke, and once
-# every pool slot is stuck the pet is silent until Compet is restarted.
+# QSoundEffect reports Ready even when its audio output has gone stale, and
+# play() then returns without making a sound (observed 2026-10-12: the pool was
+# healthy, "key pool = 10 files", yet nothing was audible).  Every previous
+# version trusted that state, so the pet could end up silent until Compet was
+# restarted.
 #
-# This version plays the Qt sample when it is already loaded (that keeps the
-# per-app volume slider meaningful) and otherwise hands the file straight to the
-# WinMM PlaySoundW API, which has no loading state to get stuck in.  One of the
-# two paths always makes noise, so the pool cannot latch into silence.
+# This version does not use QSoundEffect for playback at all.  It hands the WAV
+# straight to the WinMM PlaySoundW API, which is fire-and-forget: no source, no
+# Ready state, no event loop, nothing that can latch into silence.
 #
-# It also survives an empty <prefix>_sound_path.  Settings can end up with an
-# empty path (seen on 2026-10-12: "key pool = 0 files"), which used to leave the
-# pool empty and therefore silent; the configured path is now optional and a
-# bundled family is used when it is missing.
+# The volume sliders are still honoured.  PlaySoundW has no volume parameter, so
+# a scaled copy of the sample is generated once per (file, volume) pair and
+# cached under %TEMP%; the scaling is plain byte arithmetic, so it needs nothing
+# from the frozen application beyond the standard library.
 #
 # The DLL injects this script very early in startup, when the frozen app's
 # module system is not ready yet, so install() is retried from a background
@@ -34,10 +33,14 @@ import ctypes
 import os
 import re
 import sys
+import tempfile
 import time
 import threading
 
 POOL_RE = re.compile(r"^(.*?)(\d+)$")
+
+_plays = {"key": 0, "click": 0}
+
 
 def _log_targets():
     """Log next to the app as well, so a missing/odd HOME cannot hide output."""
@@ -65,7 +68,6 @@ def _log(msg):
 _log("script loaded")       # proves the injection actually executed
 
 # ---------------------------------------------------------------- WinMM ----
-# PlaySoundW is fire-and-forget: no source, no Ready state, no event loop.
 _SND_ASYNC = 0x0001
 _SND_NODEFAULT = 0x0002
 _SND_FILENAME = 0x00020000
@@ -94,6 +96,139 @@ def _play_wav_native(path):
         return False
 
 
+# ------------------------------------------------- volume-scaled samples ----
+# PlaySoundW cannot change volume, so samples are pre-scaled and cached.
+_CACHE = {}
+_CACHE_DIR = None
+_SCALE_FAILED = set()
+
+
+def _cache_dir():
+    global _CACHE_DIR
+    if _CACHE_DIR is None:
+        try:
+            d = os.path.join(tempfile.gettempdir(), "compet_sound_scaled")
+            os.makedirs(d, exist_ok=True)
+            _CACHE_DIR = d
+        except Exception:
+            _CACHE_DIR = ""
+    return _CACHE_DIR
+
+
+def _parse_wav(raw):
+    """Return (format, channels, rate, data_offset, data_len) for PCM WAVs."""
+    if len(raw) < 44 or raw[0:4] != b"RIFF" or raw[8:12] != b"WAVE":
+        return None
+    pos = 12
+    fmt = None
+    while pos + 8 <= len(raw):
+        cid = raw[pos:pos + 4]
+        size = int.from_bytes(raw[pos + 4:pos + 8], "little")
+        body = pos + 8
+        if cid == b"fmt ":
+            if size < 16 or body + 16 > len(raw):
+                return None
+            fmt = (int.from_bytes(raw[body:body + 2], "little"),
+                   int.from_bytes(raw[body + 2:body + 4], "little"),
+                   int.from_bytes(raw[body + 4:body + 8], "little"),
+                   int.from_bytes(raw[body + 14:body + 16], "little"))
+        elif cid == b"data":
+            if fmt is None:
+                return None
+            avail = min(size, len(raw) - body)
+            if avail <= 0:
+                return None
+            return fmt + (body, avail)
+        pos = body + size + (size & 1)
+    return None
+
+
+def _scaled_path(src, pct):
+    """A copy of *src* at *pct* percent volume, or None when impossible."""
+    if pct >= 100:
+        return src
+    try:
+        st = os.stat(src)
+    except Exception:
+        return None
+
+    key = (src, st.st_mtime, st.st_size, pct)
+    hit = _CACHE.get(key)
+    if hit and os.path.exists(hit):
+        return hit
+
+    if src in _SCALE_FAILED:
+        return None
+
+    d = _cache_dir()
+    if not d:
+        return None
+    try:
+        with open(src, "rb") as f:
+            raw = f.read()
+        parsed = _parse_wav(raw)
+        if not parsed:
+            raise ValueError("not a plain PCM WAV")
+        afmt, channels, rate, bits, off, ln = parsed
+        if afmt != 1 or channels < 1 or bits != 16:
+            raise ValueError("unsupported WAV format fmt=%r ch=%r bits=%r"
+                             % (afmt, channels, bits))
+
+        gain = pct / 100.0
+        body = raw[off:off + ln]
+        out = bytearray(len(body))
+        for i in range(0, len(body) - 1, 2):
+            v = body[i] | (body[i + 1] << 8)
+            if v >= 0x8000:
+                v -= 0x10000
+            v = int(v * gain)
+            if v > 32767:
+                v = 32767
+            elif v < -32768:
+                v = -32768
+            if v < 0:
+                v += 0x10000
+            out[i] = v & 0xFF
+            out[i + 1] = (v >> 8) & 0xFF
+
+        block = channels * 2
+        header = (b"RIFF" + (36 + len(out)).to_bytes(4, "little") + b"WAVE"
+                  + b"fmt " + (16).to_bytes(4, "little")
+                  + (1).to_bytes(2, "little") + channels.to_bytes(2, "little")
+                  + rate.to_bytes(4, "little")
+                  + (rate * block).to_bytes(4, "little")
+                  + block.to_bytes(2, "little") + (16).to_bytes(2, "little")
+                  + b"data" + len(out).to_bytes(4, "little"))
+
+        name = "%s_%d_%d.wav" % (re.sub(r"\W+", "_", os.path.basename(src))[:32],
+                                 pct, abs(hash(key)) % 100000000)
+        dst = os.path.join(d, name)
+        with open(dst, "wb") as f:
+            f.write(header)
+            f.write(out)
+        _CACHE[key] = dst
+        if len(_CACHE) > 64:                 # keep the cache folder bounded
+            _CACHE.clear()
+        return dst
+    except Exception as e:
+        _SCALE_FAILED.add(src)
+        _log("cannot scale %s for volume: %r (playing it unscaled)" % (src, e))
+        return None
+
+
+def _play(path, pct):
+    """Play *path* at *pct* percent volume.  True when WinMM accepted it."""
+    if not path:
+        return False
+    scaled = _scaled_path(path, pct)
+    if _play_wav_native(scaled):
+        return True
+    if scaled and scaled != path:
+        return _play_wav_native(path)        # last resort: unscaled
+    return False
+
+
+# ------------------------------------------------------------------ pools ----
 def _pool_key(path):
     """'spam_01.wav' -> ('spam_', '01');  None when the stem has no number."""
     stem = os.path.splitext(os.path.basename(path))[0]
@@ -171,8 +306,22 @@ def _collect_pool(chosen_path, user_dir, bundle_dir, default_prefix=None):
     return []
 
 
+def _sound_value(config_mgr, name, default):
+    """Read a numeric setting from either config layout."""
+    for holder, flat in ((getattr(config_mgr, "settings", None), True),
+                         (getattr(config_mgr, "config", None), False)):
+        if not isinstance(holder, dict):
+            continue
+        if flat and name in holder:
+            return holder.get(name, default)
+        snd = holder.get("sound")
+        if isinstance(snd, dict) and name in snd:
+            return snd.get(name, default)
+    return default
+
+
 def _sound_flag(config_mgr, name, default=True):
-    """Read a flag from either config layout (flat 'settings', nested 'config')."""
+    """Read a boolean flag from either config layout (flat 'settings', nested)."""
     for holder, key in ((getattr(config_mgr, "settings", None), name),
                         (getattr(config_mgr, "config", None), None)):
         if not isinstance(holder, dict):
@@ -209,45 +358,18 @@ def install():
 
     import core.config_manager as cm
     import core.sound_manager as sm
-    from PyQt6.QtMultimedia import QSoundEffect
-    from PyQt6.QtCore import QUrl
     from core.config_manager import config_mgr
 
     mgr_cls = sm.SoundManager
     if getattr(mgr_cls, "_compet_sound_patched", False):
         return True
 
-    def _ready(player):
-        try:
-            return player.status() == QSoundEffect.Status.Ready
-        except Exception:
-            return True
-
-    def _force(player):
-        try:
-            player.play()
-            return True
-        except Exception:
-            return False
-
-    def _set_source(player, path):
-        try:
-            player.setSource(QUrl.fromLocalFile(path) if path else QUrl())
-        except Exception:
-            pass
-
-    def _fill_pool(pool, paths):
-        for i, player in enumerate(pool):
-            _set_source(player, paths[i % len(paths)] if paths else None)
-
-    def _start(pool, paths, idx, label):
-        """Play pool[idx].  Always audible: Qt when loaded, WinMM otherwise."""
-        player = pool[idx]
-        if _ready(player) and _force(player):
-            return
-        path = paths[idx % len(paths)] if paths else None
-        if not _play_wav_native(path):
-            _force(player)          # last resort; may still be a no-op
+    def _note(label, ok):
+        """Log the first few plays and then sparsely, without flooding."""
+        n = _plays.get(label, 0) + 1
+        _plays[label] = n
+        if n <= 3 or n % 500 == 0:
+            _log("%s play #%d -> %s" % (label, n, "ok" if ok else "FAILED"))
 
     def load_sounds(self):
         if not self._initialized:
@@ -256,8 +378,6 @@ def install():
         k_path = self.get_actual_path("key")
         c_path = self.get_actual_path("click")
 
-        # This build keeps user sounds under the app's assets folder.
-        # Prefer the module's own constant, then the config manager's.
         sound_dir = getattr(sm, "ASSETS_DIR", None) or getattr(cm, "ASSETS_DIR", None)
         user_dir = getattr(cm, "USER_DATA_DIR", None)
         if user_dir:
@@ -266,27 +386,32 @@ def install():
         self._key_pool_paths = _collect_pool(k_path, user_dir, sound_dir, "spam_")
         self._click_pool_paths = _collect_pool(c_path, user_dir, sound_dir, "keyboard")
 
-        _fill_pool(self.key_pool, self._key_pool_paths)
-        _fill_pool(self.click_pool, self._click_pool_paths)
-        self.update_volumes()
+        try:
+            self.update_volumes()            # keeps the Qt objects consistent
+        except Exception:
+            pass
 
     def play_key(self):
-        if not self._initialized or not self.key_pool:
+        if not getattr(self, "_key_pool_paths", None):
             return
         if not _sound_flag(config_mgr, "key_sound_enabled", True):
             return
-        idx = self.key_idx
-        self.key_idx = (idx + 1) % len(self.key_pool)
-        _start(self.key_pool, getattr(self, "_key_pool_paths", []), idx, "key")
+        paths = self._key_pool_paths
+        idx = getattr(self, "_key_path_idx", 0) % len(paths)
+        self._key_path_idx = idx + 1
+        pct = _sound_value(config_mgr, "key_volume", 100)
+        _note("key", _play(paths[idx], pct))
 
     def play_click(self):
-        if not self._initialized or not self.click_pool:
+        if not getattr(self, "_click_pool_paths", None):
             return
         if not _sound_flag(config_mgr, "click_sound_enabled", True):
             return
-        idx = self.click_idx
-        self.click_idx = (idx + 1) % len(self.click_pool)
-        _start(self.click_pool, getattr(self, "_click_pool_paths", []), idx, "click")
+        paths = self._click_pool_paths
+        idx = getattr(self, "_click_path_idx", 0) % len(paths)
+        self._click_path_idx = idx + 1
+        pct = _sound_value(config_mgr, "click_volume", 100)
+        _note("click", _play(paths[idx], pct))
 
     mgr_cls.load_sounds = load_sounds
     mgr_cls.play_key = play_key
@@ -309,8 +434,10 @@ def _worker():
         try:
             if install():
                 import core.sound_manager as sm
-                n = len(getattr(getattr(sm, "sound_mgr", None), "_key_pool_paths", []) or [])
-                _log("sound fix installed (key pool = %d files)" % n)
+                mgr = getattr(sm, "sound_mgr", None)
+                k = len(getattr(mgr, "_key_pool_paths", []) or [])
+                c = len(getattr(mgr, "_click_pool_paths", []) or [])
+                _log("sound fix installed (key pool = %d, click pool = %d)" % (k, c))
                 return
         except Exception as e:
             last = e
