@@ -3,21 +3,20 @@
 # Runtime patch for the Compet desktop pet:
 #   1. Rotate numbered sound families (spam_01..spam_10) instead of replaying a
 #      single sample.
-#   2. Make playback survive QSoundEffect's asynchronous loading.
+#   2. Never go permanently silent.
 #
 # Why this version exists
 # -----------------------
-# The first version waited for a sample to reach Ready by connecting a throwaway
-# handler to QSoundEffect.statusChanged.  When a player never became Ready
-# (a half-loaded source, which happens when a new source is set while the old
-# one is still loading) that handler stayed connected forever and play() was
-# never called again: the pool went permanently silent until Compet restarted.
+# QSoundEffect loads its source asynchronously, and on this machine a player can
+# stay in Loading forever: the previous version logged
+# "player 0 never reached Ready - rebuilding".  Any design that waits for the
+# Ready state before calling play() can therefore drop every keystroke, and once
+# every pool slot is stuck the pet is silent until Compet is restarted.
 #
-# This version instead
-#   * never leaves a dangling statusChanged connection,
-#   * retries on a short owned QTimer and gives up cleanly,
-#   * rebuilds an individual player that stays unhealthy, so one bad player can
-#     no longer mute the whole pool.
+# This version plays the Qt sample when it is already loaded (that keeps the
+# per-app volume slider meaningful) and otherwise hands the file straight to the
+# WinMM PlaySoundW API, which has no loading state to get stuck in.  One of the
+# two paths always makes noise, so the pool cannot latch into silence.
 #
 # The DLL injects this script very early in startup, when the frozen app's
 # module system is not ready yet, so install() is retried from a background
@@ -26,6 +25,7 @@
 # Nothing on disk is modified; restarting Compet reverts everything.
 # ---------------------------------------------------------------------------
 
+import ctypes
 import os
 import re
 import sys
@@ -34,8 +34,59 @@ import threading
 
 POOL_RE = re.compile(r"^(.*?)(\d+)$")
 
-_RETRY_MS = 40           # retry cadence while a sample is still loading
-_MAX_RETRIES = 8         # ~320 ms, then the player is treated as unhealthy
+def _log_targets():
+    """Log next to the app as well, so a missing/odd HOME cannot hide output."""
+    out = [os.path.join(os.path.expanduser("~"), "_compet_sound_fix.log")]
+    try:
+        exe = getattr(sys, "executable", "") or ""
+        if exe:
+            out.append(os.path.join(os.path.dirname(os.path.abspath(exe)),
+                                    "_compet_sound_fix.log"))
+    except Exception:
+        pass
+    return out
+
+
+def _log(msg):
+    """Append one line to the diagnostic log; never raise."""
+    for path in _log_targets():
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(msg + "\n")
+        except Exception:
+            pass
+
+
+_log("script loaded")       # proves the injection actually executed
+
+# ---------------------------------------------------------------- WinMM ----
+# PlaySoundW is fire-and-forget: no source, no Ready state, no event loop.
+_SND_ASYNC = 0x0001
+_SND_NODEFAULT = 0x0002
+_SND_FILENAME = 0x00020000
+
+_play_sound = None
+_native_failed = set()
+
+
+def _play_wav_native(path):
+    """Start one sample through WinMM.  Returns True when it was accepted."""
+    global _play_sound
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        if _play_sound is None:
+            fn = ctypes.WinDLL("winmm.dll").PlaySoundW
+            fn.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint]
+            fn.restype = ctypes.c_bool
+            _play_sound = fn
+        flags = _SND_ASYNC | _SND_FILENAME | _SND_NODEFAULT
+        return bool(_play_sound(str(path), None, flags))
+    except Exception as e:
+        if "winmm" not in _native_failed:
+            _native_failed.add("winmm")
+            _log("WinMM playback unavailable: %r" % (e,))
+        return False
 
 
 def _pool_key(path):
@@ -115,7 +166,7 @@ def install():
     import core.config_manager as cm
     import core.sound_manager as sm
     from PyQt6.QtMultimedia import QSoundEffect
-    from PyQt6.QtCore import QUrl, QTimer
+    from PyQt6.QtCore import QUrl
     from core.config_manager import config_mgr
 
     mgr_cls = sm.SoundManager
@@ -146,63 +197,13 @@ def install():
             _set_source(player, paths[i % len(paths)] if paths else None)
 
     def _start(pool, paths, idx, label):
-        """Play pool[idx], self-healing a player that never becomes Ready."""
+        """Play pool[idx].  Always audible: Qt when loaded, WinMM otherwise."""
         player = pool[idx]
-
-        if _ready(player):
-            _force(player)
+        if _ready(player) and _force(player):
             return
-
-        # One recovery timer per player: rapid typing must not spawn a burst of
-        # timers that each rebuild the same player.
-        if getattr(player, "_compet_recovering", False):
-            return
-
-        state = {"n": 0}
-        timer = QTimer(player)          # parented: dies with the player
-        timer.setInterval(_RETRY_MS)
-        try:
-            player._compet_recovering = True
-        except Exception:
-            pass
-
-        def tick():
-            state["n"] += 1
-            if _ready(player):
-                timer.stop()
-                timer.deleteLater()
-                try:
-                    player._compet_recovering = False
-                except Exception:
-                    pass
-                _force(player)
-                return
-            if state["n"] < _MAX_RETRIES:
-                return
-            try:
-                player._compet_recovering = False
-            except Exception:
-                pass
-
-            # Unhealthy player: rebuild it instead of leaving a half-loaded
-            # source (and a dangling signal connection) behind for good.
-            timer.stop()
-            timer.deleteLater()
-            _log("%s: player %d never reached Ready - rebuilding" % (label, idx))
-            try:
-                fresh = QSoundEffect()
-                pool[idx] = fresh
-                if paths:
-                    _set_source(fresh, paths[idx % len(paths)])
-                try:
-                    fresh.setVolume(player.volume())
-                except Exception:
-                    pass
-            except Exception:
-                pass
-
-        timer.timeout.connect(tick)
-        timer.start()
+        path = paths[idx % len(paths)] if paths else None
+        if not _play_wav_native(path):
+            _force(player)          # last resort; may still be a no-op
 
     def load_sounds(self):
         if not self._initialized:
@@ -259,6 +260,7 @@ def install():
 def _worker():
     """Retry until the app finished starting up and the imports work."""
     last = None
+    told = False
     for _ in range(120):            # ~60 s
         try:
             if install():
@@ -268,19 +270,11 @@ def _worker():
                 return
         except Exception as e:
             last = e
+            if not told:
+                told = True
+                _log("install not ready yet: %r" % (e,))
         time.sleep(0.5)
     _log("sound fix FAILED after retries: %r" % (last,))
-
-
-LOG_PATH = os.path.join(os.path.expanduser("~"), "_compet_sound_fix.log")
-
-
-def _log(msg):
-    try:
-        with open(LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(msg + "\n")
-    except Exception:
-        pass
 
 
 threading.Thread(target=_worker, daemon=True).start()
