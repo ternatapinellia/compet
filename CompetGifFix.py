@@ -1,25 +1,80 @@
 # CompetGifFix.py
 # ---------------------------------------------------------------------------
-# Runtime animated-image (GIF / WebP) support for the Compet desktop pet.
+# Animated (GIF / WebP) skin support for the Compet desktop pet.
 #
-# CompetGifFix.dll reads this file and executes it inside a running Compet.exe.
-# It patches ui.pet_widget.PetWidget so that a skin whose image is a ".gif" or
-# ".webp" animation is played frame by frame.
+# How it works
+# ------------
+# The stock paintEvent() already scales and anchors current_pixmap, so an
+# animation only needs that pixmap to change over time.  A QTimer owned by the
+# widget swaps the frame and the existing drawing code does the rest.
 #
-# Safety:
-#   * Skins made of ordinary still images (png / jpg / ...) are left completely
-#     untouched: every patched method delegates to the original implementation
-#     unless the pet actually loaded an animation.
-#   * Nothing on disk is modified.  Restarting Compet reverts everything.
+# Why the frames get rescaled
+# ---------------------------
+# Still skins ship as large images (measured: 570x680 for ggdw / big shot,
+# 591x467 for anton, 850x850 for tenna).  A hand-made animation is often much
+# smaller (the test GIF is 160x160).  update_widget_size() sizes the window from
+# idle_pixmap, and paintEvent() squashes around the centre, so a 160x160 frame
+# produced three complaints at once: the pet looked tiny next to the other
+# skins, one wheel step changed its size wildly, and the squash/stretch looked
+# far too strong for such a small sprite.
+#
+# Frames are therefore scaled to the skin's own still-image size before use, so
+# an animated skin behaves exactly like the PNG skin it replaces.  A skin with
+# no still image (animation only) keeps its native size.
+#
+# Safety
+# ------
+#   * Skins made of ordinary still images are left completely untouched: every
+#     patched method delegates to the original implementation.
+#   * Pausing during key presses is deadline-based, so a missed frame cannot
+#     freeze the animation forever.
+#   * install() is retried from a background thread, because the DLL can run
+#     this script before the frozen app's module system is ready.
+#   * Nothing on disk is modified; restarting Compet reverts everything.
 # ---------------------------------------------------------------------------
 
 import os
+import threading
 import time
+import traceback
 
-_FRAME_INTERVAL_MS = 33          # ~30 fps repaint cadence
 _ANIM_EXTS = (".gif", ".webp")
+_STILL_EXTS = (".png", ".jpg", ".jpeg", ".bmp")
+_DEFAULT_DELAY_MS = 100
+_MIN_DELAY_MS = 20
+_MAX_FRAMES = 300            # guard against a runaway animation
+_PAUSE_MS = 400              # how long a key press may hold the idle frame
 
-QMovie = None
+
+def _log(msg):
+    for path in _log_targets():
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(msg + "\n")
+        except Exception:
+            pass
+
+
+def _log_targets():
+    out = [os.path.join(os.path.expanduser("~"), "_compet_gif_fix.log")]
+    try:
+        import sys
+        exe = getattr(sys, "executable", "") or ""
+        if exe:
+            out.append(os.path.join(os.path.dirname(os.path.abspath(exe)),
+                                    "_compet_gif_fix.log"))
+    except Exception:
+        pass
+    return out
+
+
+def _error_log(text):
+    try:
+        with open(os.path.join(os.path.expanduser("~"), "_compet_gif_fix_error.log"),
+                  "a", encoding="utf-8") as fh:
+            fh.write(text)
+    except Exception:
+        pass
 
 
 def _is_anim(path):
@@ -29,272 +84,248 @@ def _is_anim(path):
         return False
 
 
-def _make_movie(path, size=None):
-    """Return a running QMovie, or None when *path* is not a real animation."""
-    from PyQt6.QtGui import QMovie as _Movie, QImageReader
-    from PyQt6.QtCore import QSize
+def _read_frames(path):
+    """Decode a GIF/WebP into (frames, delays_ms).  None when not animated."""
+    from PyQt6.QtGui import QPixmap, QImageReader
 
-    try:
-        if not (os.path.exists(path) and _is_anim(path)):
-            return None
-    except Exception:
+    if not (path and os.path.exists(path) and _is_anim(path)):
         return None
 
     try:
         reader = QImageReader(path)
-        if not reader.supportsAnimation() or reader.imageCount() <= 1:
+        if not reader.supportsAnimation():
             return None
-    except Exception:
-        pass
-
-    try:
-        mv = _Movie(path)
-        mv.setCacheMode(_Movie.CacheMode.CacheAll)
-        if size is not None and size[0] > 0 and size[1] > 0:
-            mv.setScaledSize(QSize(int(size[0]), int(size[1])))
-        mv.jumpToFrame(0)
-        if not mv.isValid():
+        count = reader.imageCount()
+        if count <= 1:
             return None
-        return mv
     except Exception:
         return None
 
+    frames, delays = [], []
+    try:
+        for _ in range(min(count, _MAX_FRAMES)):
+            img = reader.read()
+            if img.isNull():
+                break
+            frames.append(QPixmap.fromImage(img))
+            d = reader.nextImageDelay()
+            delays.append(max(_MIN_DELAY_MS, int(d)) if d and d > 0 else _DEFAULT_DELAY_MS)
+    except Exception:
+        _error_log(traceback.format_exc())
 
-def _frame_size(mv):
-    pm = mv.currentPixmap()
-    if pm is None or pm.isNull():
-        return (0, 0)
-    return (pm.width(), pm.height())
+    if len(frames) < 2:
+        return None
+    if len(delays) < len(frames):
+        delays += [_DEFAULT_DELAY_MS] * (len(frames) - len(delays))
+    return frames, delays
+
+
+def _still_size(skin_dir, anim_name):
+    """Size of the skin's still images, used to keep the pet the same size."""
+    from PyQt6.QtGui import QImageReader
+
+    try:
+        names = sorted(os.listdir(skin_dir))
+    except Exception:
+        return None
+    for name in names:
+        if name == anim_name or not name.lower().endswith(_STILL_EXTS):
+            continue
+        try:
+            size = QImageReader(os.path.join(skin_dir, name)).size()
+        except Exception:
+            continue
+        if size.isValid() and size.width() > 0 and size.height() > 0:
+            return size
+    return None
+
+
+def _fit_frames(frames, size):
+    """Scale every frame to *size* so an animation matches its PNG siblings."""
+    from PyQt6.QtCore import Qt
+
+    if size is None or not size.isValid():
+        return frames
+    if all(f.width() == size.width() and f.height() == size.height() for f in frames):
+        return frames
+    out = []
+    for f in frames:
+        try:
+            out.append(f.scaled(size, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                Qt.TransformationMode.SmoothTransformation))
+        except Exception:
+            out.append(f)
+    return out
 
 
 def install():
-    """Patch PetWidget in place.  Safe to call more than once."""
-    global QMovie
-
-    import ui.pet_widget as pw
-    from PyQt6.QtGui import QPainter, QMovie as _Movie
+    """Patch PetWidget.  True when patched (or already patched)."""
     from PyQt6.QtCore import QTimer
-    QMovie = _Movie
+    import ui.pet_widget as pw
 
     PetWidget = pw.PetWidget
-    if getattr(PetWidget, "_compet_anim_patched", False):
+    if getattr(PetWidget, "_compet_gif_patched", False):
         return True
 
     orig_load = PetWidget.load_resources
     orig_bounce = PetWidget.trigger_bounce
     orig_reset = PetWidget.reset_to_idle
-    orig_size = PetWidget.update_widget_size
-    orig_paint = PetWidget.paintEvent
 
-    # ---- internal helpers -------------------------------------------------
+    def _timer(self):
+        t = getattr(self, "_compet_gif_timer", None)
+        if t is None:
+            t = QTimer(self)             # parented: dies together with the pet
+            t.setSingleShot(False)
+            t.timeout.connect(lambda: _advance(self))
+            self._compet_gif_timer = t
+        return t
 
-    def _anim_on(self):
-        return getattr(self, "_anim_enabled", False)
+    def _advance(self):
+        frames = getattr(self, "_compet_gif_frames", None)
+        if not frames:
+            return
+        # A key press holds the current frame; the deadline means a missed
+        # reset can only delay the animation, never freeze it outright.
+        if time.time() * 1000.0 < getattr(self, "_compet_gif_pause_until", 0):
+            return
+        try:
+            idx = (getattr(self, "_compet_gif_index", 0) + 1) % len(frames)
+            self._compet_gif_index = idx
+            self.current_pixmap = frames[idx]
+            delays = getattr(self, "_compet_gif_delays", None)
+            if delays:
+                t = getattr(self, "_compet_gif_timer", None)
+                if t is not None:
+                    t.setInterval(max(_MIN_DELAY_MS, delays[idx]))
+            self.update()
+        except Exception:
+            _error_log(traceback.format_exc())
 
-    def _activate(self):
-        cur = getattr(self, "_current_anim", None)
-        cache = getattr(self, "_movie_cache", None)
-        if cache:
-            for mv in set(cache.values()):
-                if mv is None:
-                    continue
-                try:
-                    if mv is cur:
-                        if mv.state() == QMovie.MovieState.NotRunning:
-                            mv.start()
-                    elif mv.state() != QMovie.MovieState.NotRunning:
-                        mv.stop()
-                except Exception:
-                    pass
-        ticker = getattr(self, "_anim_ticker", None)
-        if ticker is not None:
+    def load_resources(self):
+        try:
+            orig_load(self)
+        except Exception:
+            _error_log(traceback.format_exc())
+
+        # --- reset any animation from a previous skin ---------------------
+        self._compet_gif_frames = None
+        self._compet_gif_delays = None
+        self._compet_gif_index = 0
+        self._compet_gif_pause_until = 0
+        t = getattr(self, "_compet_gif_timer", None)
+        if t is not None:
             try:
-                if cur is not None:
-                    ticker.start(_FRAME_INTERVAL_MS)
-                else:
-                    ticker.stop()
+                t.stop()
             except Exception:
                 pass
 
-    def _set_current(self, key):
-        self.current_pixmap = self.cached_pixmaps.get(key, self.current_pixmap)
-        self._current_anim = self.animations.get(key)
-        _activate(self)
-
-    def _set_tap(self, idx):
         try:
-            pm = self.tap_pixmaps[idx]
-        except Exception:
-            pm = None
-        if pm is not None:
-            self.current_pixmap = pm
-        self._current_anim = self.animations.get("tap%d" % idx)
-        _activate(self)
-
-    # ---- patched methods --------------------------------------------------
-
-    def load_resources(self):
-        orig_load(self)
-        self._anim_enabled = False
-        self._current_anim = None
-        self._idle_movie = None
-        self.animations = {}
-        self._movie_cache = {}
-        try:
-            skin = self.instance_data.get("skin", "default")
+            skin = (self.instance_data or {}).get("skin", "default")
             try:
-                conf = pw.config_mgr.get_skin_config(skin)
+                conf = pw.config_mgr.get_skin_config(skin) or {}
             except Exception:
                 conf = {}
-            s_dir = os.path.join(pw.SKINS_DIR, skin)
+            anim_name = conf.get("idle_image", "idle.png")
+            if not _is_anim(anim_name):
+                return                          # still-image skin: untouched
 
-            def movie(path, size=None):
-                key = (os.path.normcase(path), size)
-                if key not in self._movie_cache:
-                    self._movie_cache[key] = _make_movie(path, size)
-                return self._movie_cache[key]
+            skin_dir = os.path.join(pw.SKINS_DIR, skin)
+            loaded = _read_frames(os.path.join(skin_dir, anim_name))
+            if loaded is None:
+                _log("%s: %s is not an animated image - leaving it alone"
+                     % (skin, anim_name))
+                return
 
-            idle_movie = movie(os.path.join(s_dir, conf.get("idle_image", "idle.png")))
-            if idle_movie is None:
-                return  # still image skin -> keep 100% original behaviour
+            frames, delays = loaded
+            size = _still_size(skin_dir, anim_name)
+            frames = _fit_frames(frames, size)
 
-            iw, ih = _frame_size(idle_movie)
-            first = idle_movie.currentPixmap()
-            if first is not None and not first.isNull():
-                self.idle_pixmap = first
-            ref = (iw, ih) if iw and ih else None
+            self._compet_gif_frames = frames
+            self._compet_gif_delays = delays
+            self._compet_gif_index = 0
+            self.current_pixmap = frames[0]
 
-            for k, v in list(self.key_mappings.items()):
-                m = movie(os.path.join(s_dir, v), ref)
-                if m is None:
-                    continue
-                key = str(k).strip()
-                pm = m.currentPixmap()
-                self.animations[key] = m
-                self.animations[key.lower()] = m
-                if pm is not None and not pm.isNull():
-                    self.cached_pixmaps[key] = pm
-                    self.cached_pixmaps[key.lower()] = pm
+            # Keep the window sized like the PNG skins, otherwise one wheel
+            # step would change the scale by a wildly different amount.
+            self.idle_pixmap = frames[0]
+            try:
+                if hasattr(self, "update_widget_size"):
+                    self.update_widget_size()
+            except Exception:
+                _error_log(traceback.format_exc())
 
-            for idx, name in enumerate(conf.get("tap_images", ["tap_left.png", "tap_right.png"])):
-                m = movie(os.path.join(s_dir, name), ref)
-                if m is not None:
-                    self.animations["tap%d" % idx] = m
-
-            if getattr(self, "_anim_ticker", None) is None:
-                t = QTimer(self)
-                t.setSingleShot(False)
-                t.timeout.connect(lambda: self.update())
-                self._anim_ticker = t
-
-            self._idle_movie = idle_movie
-            self._current_anim = idle_movie
-            self.current_pixmap = self.idle_pixmap
-            self._anim_enabled = True
-            _activate(self)
-            self.update_widget_size()
+            timer = _timer(self)
+            timer.setInterval(max(_MIN_DELAY_MS, delays[0]))
+            timer.start()
             self.update()
+            _log("%s: %s -> %d frames, %dx%d (still size %s)"
+                 % (skin, anim_name, len(frames), frames[0].width(),
+                    frames[0].height(), size))
         except Exception:
-            self._anim_enabled = False
+            self._compet_gif_frames = None
+            _error_log(traceback.format_exc())
 
     def trigger_bounce(self, key_payload):
-        if not _anim_on(self):
-            return orig_bounce(self, key_payload)
-
-        now = time.time()
-        self.hit_times.append(now)
-        apm = 0
-        if len(self.hit_times) > 1:
-            dt = now - self.hit_times[0]
-            if dt > 0:
-                apm = len(self.hit_times) / dt * 60
-
-        candidates = [c.strip() for c in key_payload.split("|") if c.strip()]
-        matched = None
-        for cand in candidates:
-            if cand in self.cached_pixmaps and not self.cached_pixmaps[cand].isNull():
-                matched = cand
-                break
-            lower = cand.lower()
-            if lower in self.cached_pixmaps and not self.cached_pixmaps[lower].isNull():
-                matched = lower
-                break
-
-        if matched is not None:
-            _set_current(self, matched)
-        elif any(c.startswith("mouse_") for c in candidates) and "mouse_click" in self.cached_pixmaps:
-            _set_current(self, "mouse_click")
-        elif self.tap_pixmaps:
-            _set_tap(self, self.tap_index)
-            self.tap_index = (self.tap_index + 1) % len(self.tap_pixmaps)
-
-        extra_squash = min(apm / 600.0, 1.0) * 0.08
-        actual_depth = min(self.squash_depth + extra_squash, 0.75)
-        self.scale_y = max(0.2, 1.0 - actual_depth)
-        self.scale_x = 1.0 + actual_depth * 0.5
-
-        self.reset_timer.start(240 if matched is not None else 160)
-        self.anim_timer.start(16)
-        self.update()
+        result = orig_bounce(self, key_payload)
+        if getattr(self, "_compet_gif_frames", None):
+            # Hold the idle frame while the app shows its own key image.
+            self._compet_gif_pause_until = time.time() * 1000.0 + _PAUSE_MS
+        return result
 
     def reset_to_idle(self):
-        if not _anim_on(self):
-            return orig_reset(self)
-        self._current_anim = getattr(self, "_idle_movie", None)
-        self.current_pixmap = self.idle_pixmap
-        _activate(self)
-        self.update()
-
-    def update_widget_size(self):
-        if not _anim_on(self):
-            return orig_size(self)
-        anim = getattr(self, "_idle_movie", None)
-        pm = anim.currentPixmap() if anim is not None else self.idle_pixmap
-        if pm is None or pm.isNull():
-            return
-        self.resize(max(40, int(pm.width() * self.display_scale)),
-                    max(40, int(pm.height() * self.display_scale)))
-
-    def paintEvent(self, event):
-        if not _anim_on(self):
-            return orig_paint(self, event)
-        anim = getattr(self, "_current_anim", None)
-        pm = anim.currentPixmap() if anim is not None else self.current_pixmap
-        if pm is None or pm.isNull():
-            return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.translate(self.width() / 2, self.height() / 2)
-        painter.scale(self.display_scale * self.scale_x,
-                      self.display_scale * self.scale_y)
-        painter.translate(-pm.width() / 2, -pm.height() / 2)
-        painter.drawPixmap(0, 0, pm)
+        self._compet_gif_pause_until = 0
+        result = orig_reset(self)
+        frames = getattr(self, "_compet_gif_frames", None)
+        if frames:
+            try:
+                self.current_pixmap = frames[getattr(self, "_compet_gif_index", 0)]
+                self.update()
+            except Exception:
+                _error_log(traceback.format_exc())
+        return result
 
     PetWidget.load_resources = load_resources
     PetWidget.trigger_bounce = trigger_bounce
     PetWidget.reset_to_idle = reset_to_idle
-    PetWidget.update_widget_size = update_widget_size
-    PetWidget.paintEvent = paintEvent
-    PetWidget._compet_anim_patched = True
+    PetWidget._compet_gif_patched = True
 
-    # Refresh pets that are already on screen.
+    # Re-apply to pets that are already on screen.
     try:
         from PyQt6.QtWidgets import QApplication
         for w in QApplication.topLevelWidgets():
             if isinstance(w, PetWidget):
                 w.load_resources()
     except Exception:
-        pass
+        _error_log(traceback.format_exc())
     return True
 
 
-try:
-    install()
-except Exception:
-    import traceback
-    try:
-        with open(os.path.join(os.path.expanduser("~"), "_compet_gif_fix_error.log"),
-                  "a", encoding="utf-8") as fh:
-            fh.write(traceback.format_exc())
-    except Exception:
-        pass
+def _worker():
+    """The DLL can run us before the frozen app's imports are ready."""
+    import sys
+    last = None
+    told = False
+    for _ in range(120):                 # ~60 s
+        try:
+            exe = getattr(sys, "executable", "") or ""
+            for cand in (os.path.dirname(exe), os.path.join(os.path.dirname(exe), "_internal"),
+                         getattr(sys, "_MEIPASS", None)):
+                if cand and cand not in sys.path:
+                    try:
+                        sys.path.insert(0, cand)
+                    except Exception:
+                        pass
+            if install():
+                _log("gif fix installed")
+                return
+        except Exception as e:
+            last = e
+            if not told:
+                told = True
+                _log("not ready yet: %r" % (e,))
+        time.sleep(0.5)
+    _log("gif fix FAILED after retries: %r" % (last,))
+    _error_log("install failed after retries: %r\n" % (last,))
+
+
+threading.Thread(target=_worker, daemon=True).start()
