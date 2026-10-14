@@ -34,6 +34,7 @@
 # ---------------------------------------------------------------------------
 
 import os
+import sys
 import threading
 import time
 import traceback
@@ -158,12 +159,38 @@ def _fit_frames(frames, size):
     return out
 
 
-def install():
-    """Patch PetWidget.  True when patched (or already patched)."""
-    from PyQt6.QtCore import QTimer
-    import ui.pet_widget as pw
+def _loaded_module(name):
+    """Fetch an already-imported module without importing it.
 
-    PetWidget = pw.PetWidget
+    Importing from the retry thread races the application's own startup
+    imports (importlib._ModuleLock is keyed by thread id), so only sys.modules
+    is consulted here.
+    """
+    try:
+        return sys.modules.get(name)
+    except Exception:
+        return None
+
+
+def install():
+    """Patch PetWidget.  True when patched, False when not ready yet.
+
+    Every module is taken from sys.modules instead of being imported.  This
+    script runs via the DLL on the interpreter's main thread, but its retry
+    thread would otherwise import while the application is still starting up;
+    the two threads then race importlib's _ModuleLock, which is keyed by thread
+    id, and the app dies with `KeyError` from `_bootstrap.acquire`.  A
+    sys.modules read is a plain dict lookup and cannot trigger the import
+    machinery.
+    """
+    pw = _loaded_module("ui.pet_widget")
+    qtcore = _loaded_module("PyQt6.QtCore")
+    if pw is None or qtcore is None:
+        return False
+    QTimer = getattr(qtcore, "QTimer", None)
+    PetWidget = getattr(pw, "PetWidget", None)
+    if QTimer is None or PetWidget is None:
+        return False
     if getattr(PetWidget, "_compet_gif_patched", False):
         return True
 
@@ -289,20 +316,34 @@ def install():
     PetWidget.reset_to_idle = reset_to_idle
     PetWidget._compet_gif_patched = True
 
-    # Re-apply to pets that are already on screen.
+    # Pets created after this point pick the patch up automatically.  Existing
+    # pets are refreshed from the GUI thread via a zero-delay timer: this
+    # function can run on the retry thread, and calling load_resources() there
+    # would touch Qt widgets off the GUI thread.
     try:
-        from PyQt6.QtWidgets import QApplication
-        for w in QApplication.topLevelWidgets():
-            if isinstance(w, PetWidget):
-                w.load_resources()
+        qtw = _loaded_module("PyQt6.QtWidgets")
+        QApplication = getattr(qtw, "QApplication", None)
+        if QApplication is not None:
+            def _refresh_existing():
+                try:
+                    for w in QApplication.topLevelWidgets():
+                        if isinstance(w, PetWidget):
+                            w.load_resources()
+                except Exception:
+                    _error_log(traceback.format_exc())
+
+            QTimer.singleShot(0, _refresh_existing)
     except Exception:
         _error_log(traceback.format_exc())
     return True
 
 
 def _worker():
-    """The DLL can run us before the frozen app's imports are ready."""
-    import sys
+    """The DLL can run us before the frozen app's imports are ready.
+
+    Nothing is imported here: the application is still starting up and an
+    import from this thread would race its own imports (see _loaded_module).
+    """
     last = None
     told = False
     for _ in range(120):                 # ~60 s

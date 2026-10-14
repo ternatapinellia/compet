@@ -352,13 +352,42 @@ def _ensure_path():
                 pass
 
 
+def _loaded_module(name):
+    """Fetch an already-imported module without importing it.
+
+    Importing from this script's thread would race the application's own
+    startup imports (importlib's _ModuleLock is keyed by thread id and the two
+    threads then fight over the same key).  sys.modules lookups are plain dict
+    reads and are safe from any thread.
+    """
+    try:
+        mod = sys.modules.get(name)
+    except Exception:
+        return None
+    return mod
+
+
 def install():
-    """Patch SoundManager.  Returns True on success, False when not ready yet."""
+    """Patch SoundManager.  Returns True on success, False when not ready yet.
+
+    The modules are looked up in sys.modules instead of imported here.  The
+    DLL dispatches this script onto the interpreter's main thread, but a plain
+    `import` in the retry thread races the application's own startup imports
+    and can abort it with `KeyError` from importlib._bootstrap (seen as
+    "File main.py, line 6, in <module> ... line 123, in acquire").  Reading
+    sys.modules never triggers the import machinery, so it cannot collide.
+    """
     _ensure_path()
 
-    import core.config_manager as cm
-    import core.sound_manager as sm
-    from core.config_manager import config_mgr
+    sm = _loaded_module("core.sound_manager")
+    cm = _loaded_module("core.config_manager")
+    if sm is None or cm is None:
+        return False                      # the app has not imported them yet
+    config_mgr = getattr(cm, "config_mgr", None)
+    if config_mgr is None:
+        return False
+    if getattr(sm, "SoundManager", None) is None:
+        return False
 
     mgr_cls = sm.SoundManager
     if getattr(mgr_cls, "_compet_sound_patched", False):
@@ -393,6 +422,11 @@ def install():
 
     def play_key(self):
         if not getattr(self, "_key_pool_paths", None):
+            try:
+                load_sounds(self)          # first use: runs on the main thread
+            except Exception:
+                pass
+        if not getattr(self, "_key_pool_paths", None):
             return
         if not _sound_flag(config_mgr, "key_sound_enabled", True):
             return
@@ -403,6 +437,11 @@ def install():
         _note("key", _play(paths[idx], pct))
 
     def play_click(self):
+        if not getattr(self, "_click_pool_paths", None):
+            try:
+                load_sounds(self)          # first use: runs on the main thread
+            except Exception:
+                pass
         if not getattr(self, "_click_pool_paths", None):
             return
         if not _sound_flag(config_mgr, "click_sound_enabled", True):
@@ -418,11 +457,10 @@ def install():
     mgr_cls.play_click = play_click
     mgr_cls._compet_sound_patched = True
 
-    try:
-        if getattr(sm.sound_mgr, "_initialized", False):
-            sm.sound_mgr.load_sounds()
-    except Exception:
-        pass
+    # No load_sounds() call here: this function can run on the retry thread and
+    # that would touch the app's Qt objects off the GUI thread.  play_key and
+    # play_click fill the pools on first use, which always happens on the main
+    # thread (the app emits key_pressed from its own event loop).
     return True
 
 
@@ -433,11 +471,10 @@ def _worker():
     for _ in range(120):            # ~60 s
         try:
             if install():
-                import core.sound_manager as sm
+                sm = _loaded_module("core.sound_manager")
                 mgr = getattr(sm, "sound_mgr", None)
-                k = len(getattr(mgr, "_key_pool_paths", []) or [])
-                c = len(getattr(mgr, "_click_pool_paths", []) or [])
-                _log("sound fix installed (key pool = %d, click pool = %d)" % (k, c))
+                ready = bool(getattr(mgr, "_initialized", False))
+                _log("sound fix installed (SoundManager ready = %s; pools fill on first use)" % ready)
                 return
         except Exception as e:
             last = e
