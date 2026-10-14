@@ -4,7 +4,8 @@
 
 1.发布了手柄适配按键映射的补丁包，适配打游戏使用，具体使用请看压缩包中的readme[gamepad-package.zip](https://github.com/user-attachments/files/33134467/gamepad-package.zip)该补丁针对软件名，只能使用compet.exe该软件名。
 
-2.发布了defernull tenna的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[anton.zip](https://github.com/user-attachments/files/32884271/anton.zip)
+2.发布了defernull tenna的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[anton.zip](https://github.com/user-attachments/files/33416168/anton.zip)
+
 
 3.发布了swapspamton的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[ggdw.zip](https://github.com/user-attachments/files/33086159/ggdw.zip)
 
