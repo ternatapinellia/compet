@@ -6,9 +6,7 @@
 
 2.发布了defernull tenna的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[anton.zip](https://github.com/user-attachments/files/33416168/anton.zip)
 
-
 3.发布了swapspamton的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[ggdw.zip](https://github.com/user-attachments/files/33086159/ggdw.zip)
-
 
 4，发布了addispam的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[addispam.zip](https://github.com/user-attachments/files/33086162/addispam.zip)
 
@@ -17,6 +15,8 @@
 6.发布了defernull hot shot的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[hot shot.zip](https://github.com/ternatapinellia/compet/releases/download/hotshot/hot.shot.zip)
 
 7.发布了defernull spamton的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[dns.zip](https://github.com/user-attachments/files/33364595/dns.zip)
+
+8.发布了swaptenna的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[swaptenna.zip](https://github.com/user-attachments/files/33416241/swaptenna.zip)
 
 1. Released a patch package for gamepad support and key mapping, designed for gaming use. For detailed instructions, please check the **README** file included in the compressed package.
    [gamepad-package.zip](https://github.com/user-attachments/files/33086134/gamepad-package.zip)
@@ -38,3 +38,6 @@
   
 7. Released the **Defernull Spamton typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
 [dns.zip](https://github.com/user-attachments/files/33364595/dns.zip)
+
+8. Released the **SwapTenna typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
+[swaptenna.zip](https://github.com/user-attachments/files/33416241/swaptenna.zip)
