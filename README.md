@@ -12,13 +12,15 @@
 
 5.发布了dr big shot的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[big shot.zip](https://github.com/user-attachments/files/33250515/big.shot.zip)
 
-6.发布了defernull hot shot的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[hot shot.zip](https://github.com/ternatapinellia/compet/releases/download/hotshot/hot.shot.zip)
+6.发布了dr spamton的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[spt.zip](https://github.com/ternatapinellia/compet/releases/download/spt/spt.zip)
 
-7.发布了defernull spamton的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[dns.zip](https://github.com/user-attachments/files/33364595/dns.zip)
+7.发布了defernull hot shot的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[hot shot.zip](https://github.com/ternatapinellia/compet/releases/download/hotshot/hot.shot.zip)
 
-8.发布了swaptenna的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[swaptenna.zip](https://github.com/user-attachments/files/33416241/swaptenna.zip)
+8.发布了defernull spamton的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[dns.zip](https://github.com/user-attachments/files/33364595/dns.zip)
 
-9.发布了dr spamton neo的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[neo.zip](https://github.com/user-attachments/files/33586664/neo.zip)
+9.发布了swaptenna的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[swaptenna.zip](https://github.com/user-attachments/files/33416241/swaptenna.zip)
+
+10.发布了dr spamton neo的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[neo.zip](https://github.com/user-attachments/files/33586664/neo.zip)
 
 1. Released a patch package for gamepad support and key mapping, designed for gaming use. For detailed instructions, please check the **README** file included in the compressed package.
    [gamepad-package.zip](https://github.com/user-attachments/files/33086134/gamepad-package.zip)
@@ -35,14 +37,17 @@
 5. Released the **Dr Big Shot typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
 [big shot.zip](https://github.com/user-attachments/files/33250515/big.shot.zip)
 
-6. Released the **Defernull Hot Shot typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
+6. Released the **DR Spamton typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
+[spt.zip](https://github.com/ternatapinellia/compet/releases/download/spt/spt.zip)
+
+7. Released the **Defernull Hot Shot typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
 [hot shot.zip](https://github.com/ternatapinellia/compet/releases/download/hotshot/hot.shot.zip)
   
-7. Released the **Defernull Spamton typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
+8. Released the **Defernull Spamton typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
 [dns.zip](https://github.com/user-attachments/files/33364595/dns.zip)
 
-8. Released the **SwapTenna typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
+9. Released the **SwapTenna typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
 [swaptenna.zip](https://github.com/user-attachments/files/33416241/swaptenna.zip)
 
-9. Released the **Dr Spamton NEO typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
+10. Released the **Dr Spamton NEO typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
 [neo.zip](https://github.com/user-attachments/files/33586664/neo.zip)
