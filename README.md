@@ -22,6 +22,8 @@
 
 10.发布了dr spamton neo的打字桌宠皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[neo.zip](https://github.com/user-attachments/files/33586664/neo.zip)
 
+11.发布了deltarune的tenna的蚂蚁塑皮肤包，其中的config文件是适配compet软件的按键配置+手柄按键映射制作的，如果其他桌宠软件，请自行导入png。[ant.zip](https://github.com/ternatapinellia/compet/releases/download/ant/ant.zip)
+
 1. Released a patch package for gamepad support and key mapping, designed for gaming use. For detailed instructions, please check the **README** file included in the compressed package.
    [gamepad-package.zip](https://github.com/user-attachments/files/33086134/gamepad-package.zip)
 
@@ -51,3 +53,6 @@
 
 10. Released the **Dr Spamton NEO typing desktop pet skin pack**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
 [neo.zip](https://github.com/user-attachments/files/33586664/neo.zip)
+
+11. Released an **ant-form Tenna skin pack from Deltarune**. The included **config** file contains key configurations and gamepad button mappings specifically designed for the **Compet** software. If you are using other desktop pet software, please import the PNG files manually.
+[ant.zip](https://github.com/ternatapinellia/compet/releases/download/ant/ant.zip)
