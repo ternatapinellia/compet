@@ -12,6 +12,7 @@ _bak_stage/
 
 # transient task logs
 _gen_out.txt
+__p*.txt
 
 # PyInstaller runtime bundle (~134MB, re-extractable from Compet.exe)
 _internal/
